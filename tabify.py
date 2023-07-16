@@ -16,7 +16,7 @@ class Tabify(QMainWindow):
     def __init__(self, args, parent = None):
         super(Tabify, self).__init__(parent)
 
-        if 'no_gui' not in args.keys() or not args['no_gui']:
+        if 'no_gui' not in args or not args['no_gui']:
             self.setupInterface(args)
         else:
             self.runCmdline(args)
@@ -28,7 +28,7 @@ class Tabify(QMainWindow):
         self.setWindowTitle("Tabify")
 
         output_path = None
-        if 'song_file' in args.keys():
+        if 'song_file' in args:
             output_path = '/home/josh/Code/Tabify/output_file.pdf'
             subprocess.run(['mscore3', args['song_file'], '-o', output_path], check=True)
 
@@ -45,7 +45,7 @@ class Tabify(QMainWindow):
         self.showMaximized()
 
     def runCmdline(self, args):
-        if 'song_file' in args.keys():
+        if 'song_file' in args:
             t = Transcriber(Guitar([
                 Pitch('E2'),
                 Pitch('A2'),
@@ -55,4 +55,12 @@ class Tabify(QMainWindow):
                 Pitch('E4')]))
             
             tab = t.transcribe(args['song_file'])
-            print(str(tab))
+            if 'output_file' in args:
+                pass # todo: stick str(tab) in the file
+            else:
+                print(str(tab))
+        else:
+            self.usageScreen()
+    
+    def usageScreen(self):
+        pass

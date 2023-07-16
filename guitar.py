@@ -2,6 +2,7 @@
 
 '''
 from music21.pitch import Pitch
+from music21.interval import Interval
 
 class Guitar:
     '''
@@ -18,7 +19,21 @@ class Guitar:
             self.tuning = tuning
         self.num_frets = num_frets
         self.num_strings = num_strings
-        self.tuning = tuning
+    
+    def range_size(self):
+        return Interval(self.lowest_pitch(), self.highest_pitch()).semitones
+
+    def lowest_pitch(self):
+        return self.tuning[0]
+    
+    def highest_pitch(self):
+        return self.tuning[-1].transpose(self.num_frets)
+    
+    def is_barreable(self, notes):
+        for i in range(self.num_frets):
+            if len([n for n in notes if n not in [t.transpose(i) for t in self.tuning]]) < 4:
+                return True
+        return False
 
     def __str__(self):
         return ''.join([p.name for p in self.tuning])

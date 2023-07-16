@@ -11,9 +11,23 @@ class Fingering:
     notes: a list of finger positions (Tuple<Integer, Integer>) to be 
     included in the fingering
     '''
-    def __init__(self, notes):
-        self.fingers = notes#self.__calculate_finger_placement(notes)
-        self.stretch_cost = self.__calculate_stretch()
+    def __init__(self, notes = None):
+        if notes is None:
+            self.fingers = {}
+        else:
+            self.fingers = notes
+            self.stretch_cost = self.__calculate_stretch()
+        self.chord = None
+        
+        self.finger_distance_matrix = [
+            [0, self.__finger_distance((0,1), (3,6)), self.__finger_distance((0,1), (4,6)), self.__finger_distance((0,1), (5,6))],
+            [self.__finger_distance((0,1), (3,6)), 0, self.__finger_distance((0,1), (2,6)), self.__finger_distance((0,1), (4,6))],
+            [self.__finger_distance((0,1), (4,6)), self.__finger_distance((0,1), (2,6)), 0, self.__finger_distance((0,1), (1,6))],
+            [self.__finger_distance((0,1), (5,6)), self.__finger_distance((0,1), (4,6)), self.__finger_distance((0,1), (1,6)), 0]
+        ]
+
+    def get_notes(self):
+        return [note for finger in self.fingers.values() for note in finger]
 
     def finger_is_active(self, finger_no):
         '''
@@ -23,31 +37,16 @@ class Fingering:
         for pinky)
         Returns: True or False
         '''
-        return finger_no in self.fingers.keys()
-
-    # def __calculate_finger_placement(self, notes):
-    #     sorted_notes = sorted(notes)
-    #     fingers = dict()
-
-    #     # separate out open notes since they won't be fingered
-    #     open_notes = [n for n in sorted_notes if n[0] == 0]
-    #     if len(open_notes) > 0:
-    #         fingers[None] = open_notes
-    #         sorted_notes = [n for n in sorted_notes if n[0] != 0]
-
-    #     curr_finger = 1
-    #     # take care of barreing if necessary
-    #     if len(sorted_notes) > 4:
-    #         fingers[curr_finger] = [n for n in sorted_notes if n[0] == sorted_notes[0][0]]
-    #         curr_finger += 1
-    #         sorted_notes = [n for n in sorted_notes if n[0] != sorted_notes[0][0]]
-
-    #     # assign fingers to the rest of the notes sequentially
-    #     for note in sorted_notes:
-    #         fingers[curr_finger] = [note]
-    #         curr_finger += 1
-
-    #     return fingers
+        return finger_no in self.fingers
+    
+    def is_possible(self):
+        for i in range(1, 4):
+            if i in self.fingers:
+                for j in range(i + 1, 5):
+                    if j in self.fingers:
+                        if self.finger_distance_matrix[i-1][j-1] < self.__finger_distance(self.fingers[i][0], self.fingers[j][0]):
+                            return False
+        return True
 
     def __calculate_stretch(self):
         '''
@@ -57,7 +56,10 @@ class Fingering:
         '''
         finger_stretch = 0
 
-        keys = sorted([k for k in self.fingers.keys() if k is not None])
+        keys = sorted([k for k in self.fingers if k is not None])
+        if not keys:
+            return 0
+        
         f_curr = keys[0]
         for f_next in keys[1:]:
             if self.fingers[f_next] is not None:
@@ -87,17 +89,17 @@ class Fingering:
         '''
         finger_movement = 0
 
-        for i, modifier in finger_inactivity:
-            curr_finger = self.fingers[i]
-            next_finger = other.fingers[i]
-            if curr_finger is not None and next_finger is not None:
+        for i, modifier in enumerate(finger_inactivity):
+            if i + 1 in self.fingers and i + 1 in other.fingers:
+                curr_finger = self.fingers[i + 1]
+                next_finger = other.fingers[i + 1]
                 finger_movement += self.__finger_distance(
                     curr_finger[0],
                     next_finger[0],
                     modifier)
         return finger_movement
 
-    def tablature(self, num_strings = 6):
+    def tablature(self, num_strings = 6, vertical = False):
         flattened_notes = [note for finger in self.fingers.values() for note in finger]
         notes = sorted(flattened_notes, key = lambda v: (v[1], -v[0]))
         result = ''
@@ -107,4 +109,7 @@ class Fingering:
                 notes = [n for n in notes if n[1] != i]
             else:
                 result += '-'
+            
+            if vertical:
+                result += '\n'
         return result

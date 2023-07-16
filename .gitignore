@@ -1,4 +1,5 @@
 *.pyc
-output_file.pdf
+*.pdf
 .pylintrc
 *.txt
+*.musicxml
