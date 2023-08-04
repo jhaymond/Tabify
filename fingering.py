@@ -18,6 +18,9 @@ class Fingering:
             self.fingers = notes
             self.stretch_cost = self.__calculate_stretch()
         self.chord = None
+
+        self.from_chords = {}
+        self.to_chords = {}
         
         self.finger_distance_matrix = [
             [0, self.__finger_distance((0,1), (3,6)), self.__finger_distance((0,1), (4,6)), self.__finger_distance((0,1), (5,6))],
@@ -25,6 +28,11 @@ class Fingering:
             [self.__finger_distance((0,1), (4,6)), self.__finger_distance((0,1), (2,6)), 0, self.__finger_distance((0,1), (1,6))],
             [self.__finger_distance((0,1), (5,6)), self.__finger_distance((0,1), (4,6)), self.__finger_distance((0,1), (1,6)), 0]
         ]
+    
+    def set_chord(self, chord):
+        self.chord = chord
+        self.from_chords[str(chord)] = [(0, self)]
+        self.to_chords[str(chord)] = [(0, self)]
 
     def get_notes(self):
         return [note for finger in self.fingers.values() for note in finger]
@@ -79,7 +87,7 @@ class Fingering:
         '''
         return math.sqrt((f_2[0]*2.5-f_1[0]*2.5)**2+(f_2[1]-f_1[1])**2)/modifier
 
-    def calculate_finger_movement(self, other, finger_inactivity):
+    def calculate_finger_movement(self, other):
         '''
         Calculates the relative difficulty of moving from this fingering to another specified 
         fingering.
@@ -89,14 +97,14 @@ class Fingering:
         '''
         finger_movement = 0
 
-        for i, modifier in enumerate(finger_inactivity):
+        for i in range(4):
             if i + 1 in self.fingers and i + 1 in other.fingers:
                 curr_finger = self.fingers[i + 1]
                 next_finger = other.fingers[i + 1]
                 finger_movement += self.__finger_distance(
                     curr_finger[0],
                     next_finger[0],
-                    modifier)
+                    1)
         return finger_movement
 
     def tablature(self, num_strings = 6, vertical = False):

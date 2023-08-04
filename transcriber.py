@@ -2,13 +2,18 @@
 Defines the Transcriber class, which can use the transcribe() function to convert a sheet music file
 into a Tab object.
 '''
-from chord import Chord
-from guitar import Guitar
-from fingering import Fingering
+from random import random
+from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
 import music21.chord
 from music21 import converter
 from music21.pitch import Pitch
 from music21.interval import Interval
+from chord import Chord
+from guitar import Guitar
+from fingering import Fingering
+from tab import Tab
+from fingering_store import FingeringStore
 
 OCTAVE = 12
 NUM_FINGERS = 4
@@ -22,6 +27,8 @@ THIRTEENTH = 6
 SEVENTH = 7
 MAX_MODIFIER = 3
 
+LOCK = Lock()
+
 class Transcriber:
     '''
     A class for converting sheet music files into Tab objects.
@@ -29,7 +36,7 @@ class Transcriber:
     '''
     def __init__(self, guitar = Guitar()):
         self.guitar = guitar
-        self.saved_fingerings = {}
+        self.saved_fingerings = FingeringStore()
         self.notes = []
 
     def transcribe(self, song):
@@ -40,11 +47,105 @@ class Transcriber:
         '''
         song_components = ['Note', 'Chord']
         notes = converter.parse(song).flatten().getElementsByClass(song_components)
-        #notes = music21.corpus.parse('bach/bwv66.6').flatten().getElementsByClass(song_components)
+        notes = music21.corpus.parse('bach/bwv66.6').flatten().getElementsByClass(song_components)
         if not notes:
             return []
-        self.prepare_song(notes)
-        return self.evaluate_song(None, 0, self.notes, {}, [1 for i in range(NUM_FINGERS)])
+        self.notes = self.prepare_song(notes)
+        num_threads = 1 + min([len(self.notes) // 20, 7])
+        notes_per_thread = len(self.notes)//num_threads
+
+        print('Threads: ' + str(num_threads) +', Chords per thread: ' + str(notes_per_thread))
+        
+        results = []
+        with ThreadPoolExecutor() as executor:
+            futures = [executor.submit(self.evaluate_song_merge,
+                                       self.notes[t*len(self.notes)//num_threads:(t+1)*len(self.notes)//num_threads])
+                       for t
+                       in range(num_threads)]
+            results = [future.result() for future in futures]
+        
+        results = sum([r[1] for r in results], [])
+        return Tab(results, self.guitar)
+    
+    #def evaluate_with_fingering(self, song, fingering, index, reverse = False):
+
+    def evaluate_song_merge(self, song_part):
+        if len(song_part) > 2:
+            a = self.evaluate_song_merge(song_part[:1+len(song_part)//2])
+            b = self.evaluate_song_merge(song_part[len(song_part)//2:])
+            if a[-1] != b[0]:
+                revised_a = [b[0]]
+                revised_a_cost = b[0].stretch_cost - a[-1].stretch_cost
+                prev_fingering = a[-1]
+                for fingering in a[:-1][::-1]:
+                    new_transition = revised_a[0].from_chords[fingering.chord][0]
+                    old_transition_cost = fingering.calculate_finger_movement(prev_fingering)
+                    revised_a = [new_transition[1]] + revised_a
+                    revised_a_cost += (new_transition[0] + new_transition[1].stretch_cost) - (old_transition_cost + fingering.stretch_cost)
+                    if new_transition[1] == fingering:
+                        revised_a = a[:len(a) - len(revised_a)] + revised_a
+                        break
+                    prev_fingering = fingering
+
+                revised_b = [a[-1]]
+                revised_b_cost = a[-1].stretch_cost - b[0].stretch_cost
+                prev_fingering = b[0]
+                for fingering in b[1:]:
+                    new_transition = revised_b[-1].to_chords[fingering.chord][0]
+                    old_transition_cost = prev_fingering.calculate_finger_movement(fingering)
+                    revised_b += [new_transition[1]]
+                    revised_b_cost += (new_transition[0] + new_transition[1].stretch_cost) - (old_transition_cost + fingering.stretch_cost)
+                    if new_transition[1] == fingering:
+                        revised_b += b[len(b) - len(revised_b):]
+                        break
+                    prev_fingering = fingering
+
+                if revised_a_cost < revised_b_cost:
+                    a = revised_a
+                    b = b[1:]
+                else:
+                    b = revised_b
+                    a = a[:-1]
+            else:
+                b = b[1:]
+            return a + b    
+        elif len(song_part) <= 1:
+            return song_part
+        elif len(song_part) == 2:
+            return self.saved_fingerings[Chord(song_part[0])][0].to_chords[str(Chord(song_part[1]))][0]
+
+    def evaluate_song_random_improvement(self, song):
+        improvement_iterations = len(song) * 5
+        solution = []
+        cost = 2000000000
+
+        for _ in range(improvement_iterations):
+            song_idx = 0
+            curr_fingerings = self.saved_fingerings[str(Chord(song[song_idx]))]
+            fingering_idx = 0
+
+            while solution and solution[song_idx] == curr_fingerings[fingering_idx]:
+                song_idx = random(len(song))
+                curr_fingerings = self.saved_fingerings[str(Chord(song[song_idx]))]
+                fingering_idx = random(len(curr_fingerings))
+
+            tmp_solution = [curr_fingerings[fingering_idx]]
+            tmp_cost = curr_fingerings[fingering_idx].stretch_cost
+
+            for j in range(song_idx):
+                new_transition = tmp_solution[0].from_chords[Chord(song[song_idx - j - 1])][0]
+                tmp_solution = [new_transition[1]] + tmp_solution
+                tmp_cost += new_transition[0] + new_transition[1].stretch_cost
+
+            for j in range(song_idx + 1, len(song)):
+                new_transition = tmp_solution[-1].to_chords[Chord(song[j])][0]
+                tmp_solution += [new_transition[1]]
+                tmp_cost += new_transition[0] + new_transition[1].stretch_cost
+
+            if tmp_cost < cost:
+                solution = tmp_solution
+
+        return solution
 
     def get_transposition(self, notes):
         '''
@@ -83,23 +184,38 @@ class Transcriber:
         '''
         
         '''
-        self.notes = []
+        prepared_notes = []
         idx = 0
+        current_offset = 0
         transpose_steps = self.get_transposition(notes)
-
         for note in notes:
             if note.isChord:
                 new_notes = [n.transpose(transpose_steps) for n in note.notes]
             else:
                 new_notes = [note.transpose(transpose_steps)]
 
-            if len(self.notes) == 0:
-                self.notes.append(new_notes)
-            elif self.notes[idx][0].offset != note.offset:
+            if len(prepared_notes) == 0:
+                prepared_notes.append(new_notes)
+                current_offset = note.offset
+            elif current_offset != note.offset:
+                # gather all viable fingerings for all the chords in the song
+                new_chord = Chord(prepared_notes[idx])
+                if new_chord not in self.saved_fingerings:
+                    new_fingerings = self.get_fingerings(prepared_notes[idx])
+                    if not new_fingerings:
+                        new_fingerings = self.get_fingerings(self.simplify_chord(prepared_notes[idx]))
+                    self.saved_fingerings.add_chord(new_chord, new_fingerings)
+
+                    if idx > 0:
+                        prev_chord = Chord(prepared_notes[idx - 1])
+                        self.saved_fingerings.add_transition(prev_chord, new_chord)
+
                 idx += 1
-                self.notes.append(new_notes)
+                current_offset = note.offset
+                prepared_notes.append(new_notes)
             else:
-                self.notes[idx].extend(new_notes)
+                prepared_notes[idx].extend(new_notes)
+        return prepared_notes
 
     def simplify_chord(self, chord):
         '''
@@ -137,7 +253,6 @@ class Transcriber:
         chord_breadth = Interval(new_chord[0].pitch, new_chord[-1].pitch).semitones
 
         if new_chord[0].pitch < self.guitar.lowest_pitch():
-            # this except add it to new_chord
             new_chord[0].pitch = new_chord[0].pitch.transpose(OCTAVE)
             for note in new_chord[1:]:
                 if note.pitch < new_chord[0].pitch:
@@ -147,7 +262,6 @@ class Transcriber:
             for note in new_chord[::-1][:-1]:
                 if note.pitch > new_chord[-1].pitch:
                     note.pitch = note.pitch.transpose(-OCTAVE)
-
 
         while not self.guitar.is_barreable(new_chord) and len(new_chord) > NUM_FINGERS:
             new_chord = [n for n in new_chord if n.name in prioritized_notes[:len(new_chord)-1]]
@@ -206,6 +320,10 @@ class Transcriber:
                 fingerings += self.get_fingerings_for_fretting(new_fingering_in_progress)
             else:
                 fingerings += self.get_fingerings(new_remaining_chord, new_fingering_in_progress)
+
+        if not fingering_in_progress:
+            for fingering in fingerings:
+                fingering.chord = remaining_chord
 
         return fingerings
 
@@ -272,80 +390,84 @@ class Transcriber:
 
         return fingerings
 
-    def evaluate_song(self, prev_fingering, cost, remaining_song, saved_transitions, modifiers):
-        '''
+    # def evaluate_song(self, prev_fingering, cost, remaining_song, saved_transitions, modifiers):
+    #     '''
         
-        '''
-        if len(remaining_song) == 0:
-            print('recursion end!')
-            return (cost, [prev_fingering])
+    #     '''
+    #     if len(remaining_song) == 0:
+    #         return (cost, [prev_fingering])
 
-        curr_notes = remaining_song[0]
-        fingering_duration = min([n.quarterLength for n in curr_notes])
+    #     curr_notes = remaining_song[0]
+    #     fingering_duration = min([n.quarterLength for n in curr_notes])
 
-        chord = Chord(curr_notes)
-        saved_fingerings_idx = str(chord)
-        saved_transitions_idx = None
-        if prev_fingering:
-            prev_chord_idx = str(prev_fingering.chord)
-            if prev_chord_idx == saved_fingerings_idx:
-                result = self.evaluate_song(prev_fingering,
-                            cost,
-                            remaining_song[1:],
-                            saved_transitions,
-                            [1
-                            if prev_fingering.finger_is_active(i + 1)
-                            else min([modifiers[i] + fingering_duration, MAX_MODIFIER])
-                            for i in range(NUM_FINGERS)])
-                return (result[0], [prev_fingering] + result[1])
-            saved_transitions_idx = prev_chord_idx + '_' + saved_fingerings_idx
+    #     chord = Chord(curr_notes)
+    #     saved_fingerings_idx = str(chord)
+    #     saved_transitions_idx = None
+    #     if prev_fingering:
+    #         prev_chord_idx = str(prev_fingering.chord)
+    #         if prev_chord_idx == saved_fingerings_idx:
+    #             result = self.evaluate_song(prev_fingering,
+    #                         cost,
+    #                         remaining_song[1:],
+    #                         saved_transitions,
+    #                         [1
+    #                         if prev_fingering.finger_is_active(i + 1)
+    #                         else min([modifiers[i] + fingering_duration, MAX_MODIFIER])
+    #                         for i in range(NUM_FINGERS)])
+    #             return (result[0], [prev_fingering] + result[1])
+    #         saved_transitions_idx = prev_chord_idx + '_' + saved_fingerings_idx
 
-        if saved_transitions_idx in saved_transitions:
-            transition = saved_transitions[saved_transitions_idx]
-            fingering_duration = min([n.quarterLength for n in curr_notes])
-            result = self.evaluate_song(transition[1],
-                                      cost + transition[1].stretch_cost + transition[0],
-                                      remaining_song[1:],
-                                      saved_transitions,
-                                      [1
-                                       if transition[1].finger_is_active(i + 1)
-                                       else min([modifiers[i] + fingering_duration, MAX_MODIFIER])
-                                       for i in range(NUM_FINGERS)])
-            return (result[0], [prev_fingering] + result[1])
+    #     if saved_transitions_idx in saved_transitions:
+    #         transition = saved_transitions[saved_transitions_idx]
+    #         fingering_duration = min([n.quarterLength for n in curr_notes])
+    #         result = self.evaluate_song(transition[1],
+    #                                   cost + transition[1].stretch_cost + transition[0],
+    #                                   remaining_song[1:],
+    #                                   saved_transitions,
+    #                                   [1
+    #                                    if transition[1].finger_is_active(i + 1)
+    #                                    else min([modifiers[i] + fingering_duration, MAX_MODIFIER])
+    #                                    for i in range(NUM_FINGERS)])
+    #         return (result[0], [prev_fingering] + result[1])
         
-        results = []
-        if saved_fingerings_idx in self.saved_fingerings:
-            curr_fingerings = self.saved_fingerings[saved_fingerings_idx]
-        else:
-            curr_fingerings = []
-            while not curr_fingerings:
-                curr_fingerings = self.get_fingerings(curr_notes)
-                if not curr_fingerings:
-                    curr_notes = self.simplify_chord(curr_notes)
-            for fingering in curr_fingerings:
-                fingering.chord = chord
-            self.saved_fingerings[saved_fingerings_idx] = curr_fingerings
-        for fingering in curr_fingerings:
-            transition_cost = 0
-            saved_transitions_branch = saved_transitions
-            if prev_fingering is not None:
-                transition_cost = prev_fingering.calculate_finger_movement(fingering, modifiers)
-                saved_transitions_branch = dict(saved_transitions)
-                saved_transitions_branch[saved_transitions_idx] = (transition_cost, fingering)
-            result = self.evaluate_song(fingering,
-                                        cost + fingering.stretch_cost + transition_cost,
-                                        remaining_song[1:],
-                                        saved_transitions_branch,
-                                        [1
-                                         if fingering.finger_is_active(i + 1)
-                                         else min([modifiers[i] + fingering_duration, MAX_MODIFIER])
-                                         for i in range(NUM_FINGERS)])
-            results.append(result)
-            if saved_transitions_branch != saved_transitions:
-                del saved_transitions_branch
+    #     results = []
+    #     if saved_fingerings_idx in self.saved_fingerings:
+    #         curr_fingerings = self.saved_fingerings[saved_fingerings_idx]
+    #     else:
+    #         curr_fingerings = []
+    #         count = 0
+    #         while not curr_fingerings:
+    #             print(count)
+    #             count += 1
+    #             curr_fingerings = self.get_fingerings(curr_notes)
+    #             if not curr_fingerings:
+    #                 curr_notes = self.simplify_chord(curr_notes)
+    #         for fingering in curr_fingerings:
+    #             fingering.chord = chord
+    #         with LOCK:
+    #             self.saved_fingerings[saved_fingerings_idx] = curr_fingerings
+    #     print(len(curr_fingerings))
+    #     for fingering in curr_fingerings:
+    #         transition_cost = 0
+    #         saved_transitions_branch = saved_transitions
+    #         if prev_fingering is not None:
+    #             transition_cost = prev_fingering.calculate_finger_movement(fingering)
+    #             saved_transitions_branch = dict(saved_transitions)
+    #             saved_transitions_branch[saved_transitions_idx] = (transition_cost, fingering)
+    #         result = self.evaluate_song(fingering,
+    #                                     cost + fingering.stretch_cost + transition_cost,
+    #                                     remaining_song[1:],
+    #                                     saved_transitions_branch,
+    #                                     [1
+    #                                      if fingering.finger_is_active(i + 1)
+    #                                      else min([modifiers[i] + fingering_duration, MAX_MODIFIER])
+    #                                      for i in range(NUM_FINGERS)])
+    #         results.append(result)
+    #         if saved_transitions_branch != saved_transitions:
+    #             del saved_transitions_branch
 
-        best = sorted(results, key = lambda r: (r[0], sum([f[0] for f in r[1][0].get_notes()])))[0]
+    #     best = sorted(results, key = lambda r: (r[0], sum([f[0] for f in r[1][0].get_notes()])))[0]
 
-        if prev_fingering:
-            return (best[0], [prev_fingering] + best[1])
-        return best
+    #     if prev_fingering:
+    #         return (best[0], [prev_fingering] + best[1])
+    #     return best
