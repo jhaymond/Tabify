@@ -87,7 +87,7 @@ class Fingering:
         '''
         return math.sqrt((f_2[0]*2.5-f_1[0]*2.5)**2+(f_2[1]-f_1[1])**2)/modifier
 
-    def calculate_finger_movement(self, other):
+    def transition(self, other):
         '''
         Calculates the relative difficulty of moving from this fingering to another specified 
         fingering.

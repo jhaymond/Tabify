@@ -11,3 +11,6 @@ class Tab:
     def format(self):
         for f in self.fingerings:
             yield str(f)
+    
+    def __str__(self):
+        return ' | '.join([f.tablature() for f in self.fingerings])
