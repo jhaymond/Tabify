@@ -1,11 +1,18 @@
+'''
+
+'''
 import fitz
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget, QScrollArea
 from PyQt5.QtGui import QPixmap, QImage
 from PyQt5.QtCore import Qt
 
+DEFAULT_PDF_PATH = '/home/josh/Code/Tabify/output_file.pdf'
 
 class ScoreViewer(QWidget):
-    def __init__(self, pdf_path = None, parent=None):
+    '''
+    
+    '''
+    def __init__(self, pdf_path = DEFAULT_PDF_PATH, parent = None):
         super(ScoreViewer, self).__init__(parent)
 
         self.scroll_area = QScrollArea()
@@ -23,6 +30,9 @@ class ScoreViewer(QWidget):
             self.display_splash()
 
     def load_pdf(self, pdf_path):
+        '''
+        
+        '''
         doc = fitz.open(pdf_path)
 
         content_widget = QWidget()
@@ -44,5 +54,8 @@ class ScoreViewer(QWidget):
         self.scroll_area.setWidget(content_widget)
 
     def display_splash(self):
-        # todo: show a button that will open a file dialog, maybe some visual elements
-        pass
+        '''
+        
+        '''
+        # todo: show a blank window with text prompting the user to choose a file in the control
+        # center
